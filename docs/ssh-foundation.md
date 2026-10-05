@@ -91,8 +91,10 @@ autossh -M 0 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForward
 ```
 
 With `cfg.macUser` and `cfg.tunnelTargetHost` substituted for the real
-values (`tunnelTargetHost` defaults to `10.211.55.1`, the Parallels
-Shared-network gateway, which is the Mac itself on that network).
+values (`tunnelTargetHost` is `10.211.55.2` — the Mac's own address on
+the Parallels Shared network, confirmed live during Leg 1; *not*
+`10.211.55.1`, which is the Parallels Shared-network gateway/router, a
+distinct host).
 
 Deliberate flags, and why:
 
@@ -163,7 +165,7 @@ live, in this interactive session, against a real Parallels VM.
 | 1 | Flake evaluates on aarch64-darwin | check (`cross-instantiate-probe`) | ✅ check-verified |
 | 2 | Merged config resolves intended values (sshd, sudo, wheel, tunnel unit, static IP) | check (`base-merged`) | ✅ check-verified |
 | 3 | `macUser = null` gates `toplevel` with the exact message | check (`macuser-assertion`) | ✅ check-verified |
-| 4 | Leg 1: Parallels transport (Mac→guest via reverse tunnel) | session | pending Phase 6 |
+| 4 | Leg 1: Parallels transport (Mac→guest via reverse tunnel) | session | ✅ session-verified (exit 0) |
 | 5 | Leg 2: Mac→guest Nix builder handshake (`nix store info --store ssh-ng://nix-builder`) | session | pending Phase 7 |
 | 6 | `sudo -n true` on the guest (passwordless sudo + wheel, F3) | session | pending Phase 7 |
 | 7 | Cold-boot connect (fresh guest boots, tunnel comes up unattended) | session | pending Phase 7 |
@@ -193,10 +195,37 @@ the SSH link it runs over). They are deferred to a follow-up session.
 
 **State to resume from** (fill in as Phases 6/7 actually run):
 
-- Leg 1 (Ubuntu) result: _pending_
+- Leg 1 (Ubuntu) result: **PASSED.** Fresh Ubuntu 26.04 guest
+  (`ubuntu-26-04`), DHCP address `10.211.55.19` on `eth0` (altname
+  `enp0s5`, confirming the NixOS interface assumption holds). Guest
+  generated `~/.ssh/id_guest` (ed25519); public half appended to
+  `janvansweevelt`'s `~/.ssh/authorized_keys` on the Mac. Ran the
+  byte-for-byte `ExecStart` autossh command manually in the foreground.
+  Mac's `/etc/nix/nix-builder.pub` appended to the guest's
+  `~/.ssh/authorized_keys` for `parallels` (this hop — Mac→guest store —
+  was not pre-seeded on a throwaway guest and had to be added manually;
+  Leg 2 will need the same). Final probe:
+  `sudo ssh -p 2222 -i /etc/nix/nix-builder-key parallels@localhost true`
+  → **exit 0**. Guest discarded after.
+
+  **Two issues hit and fixed, both now folded into this runbook /
+  `hosts/default.nix`:**
+  1. `hosts/default.nix`'s `tunnelTargetHost` was wrong: `10.211.55.1` is
+     the Parallels Shared-network **gateway/router**, not the Mac. The
+     Mac's actual address on that network is `10.211.55.2` (confirmed via
+     `ifconfig` on the Mac — bridge interface `10.211.55.2/24`). Fixed in
+     `hosts/default.nix`; `gateway` correctly stays `10.211.55.1`.
+  2. The throwaway Ubuntu guest had no `openssh-server` installed at all
+     (`ssh.service` unit didn't exist), so both the local loopback test
+     and the tunnel failed with "connection refused" / "closed by remote
+     host" — nothing was listening on port 22 on the guest. Installed via
+     `apt-get install -y openssh-server` + `systemctl enable --now ssh`.
+     Not applicable to Leg 2 (NixOS ships/enables sshd via `base.nix`
+     itself), but worth remembering if a throwaway transport-only guest
+     is ever re-used for Leg 1 again.
 - Leg 2 (NixOS) result: _pending_
 - `prl-tools` spike outcome: _pending_ (see Open Decisions)
-- In-session gate lines 4–9: _pending_
+- In-session gate lines 5–9: _pending_
 - Current guest IP / host key state: _pending_
 - Anything re-seeded on the Mac (`known_hosts`, `authorized_keys`): _pending_
 
