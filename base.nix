@@ -143,16 +143,6 @@ in
     networking.defaultGateway = cfg.gateway;
     networking.nameservers = cfg.nameservers;
 
-    # TEMPORARY Phase 7 live-session diagnostic only: static networking isn't
-    # coming up on the current guest and, by design (A4), there is no
-    # password-based way in -- SSH is key-only and console login has no
-    # password either. Auto-login the local console (console only; does not
-    # touch sshd's key-only policy above) purely to inspect why
-    # networking.interfaces.${cfg.interface} isn't bringing the link up.
-    # MUST be reverted before M0 is considered done; tracked in
-    # docs/ssh-foundation.md.
-    services.getty.autologinUser = lib.mkDefault "root";
-
     # --- sshd, users, passwordless sudo ------------------------------------
     services.openssh = {
       enable = true;
