@@ -85,7 +85,7 @@ in
     # --- Static networking (Pitfall #3) ------------------------------------
     # No guest-side networking.hosts entry and no ssh alias for the Mac here:
     # the guest reaches the Mac only via the outbound autossh reverse tunnel
-    # (Phase 3), never via a guest-resolved hostname/IP alias baked into
+    # (below), never via a guest-resolved hostname/IP alias baked into
     # /etc/hosts. Keep this deliberately dumb.
     networking.hostName = "builder-base";
     networking.useDHCP = false;
@@ -100,5 +100,73 @@ in
     };
     networking.defaultGateway = cfg.gateway;
     networking.nameservers = cfg.nameservers;
+
+    # --- sshd, users, passwordless sudo ------------------------------------
+    services.openssh = {
+      enable = true;
+      settings = {
+        PasswordAuthentication = false;
+        KbdInteractiveAuthentication = false;
+        PermitRootLogin = "prohibit-password";
+      };
+    };
+
+    users.users.parallels = {
+      isNormalUser = true;
+      home = "/home/parallels";
+      extraGroups = [ "wheel" ]; # load-bearing: sudo fails without this regardless of the flag below
+      openssh.authorizedKeys.keys = cfg.authorizedKeys;
+    };
+
+    users.users.root.openssh.authorizedKeys.keys = cfg.authorizedKeys;
+
+    # A5: parallels is key-only with no password, so default NixOS sudo
+    # (which requires a password) fails closed. This, plus parallels staying
+    # in wheel above, is what makes passwordless sudo actually work.
+    security.sudo.wheelNeedsPassword = false;
+
+    # Parallels guest tools spike: pulls unfree prl-tools via the predicate
+    # above. Historically x86-centric with no confirmed prior aarch64 usage;
+    # resolved live in Phase 7 against a real aarch64 NixOS guest. If it
+    # fails to build there, this line gets commented out (see
+    # docs/ssh-foundation.md Open Decisions).
+    hardware.parallels.enable = true;
+
+    # --- Guest -> Mac reverse tunnel (Pitfall #4) ---------------------------
+    # autossh keeps an outbound reverse tunnel open so the Mac can reach the
+    # guest's sshd on localhost:2222 (Mac->guest store hop uses this port).
+    # This is the *other* SSH hop from the Mac->guest nix-builder identity:
+    # here the guest authenticates outbound to the Mac as cfg.macUser, using
+    # a key generated ON THE GUEST (-i below), whose public half must be
+    # appended to cfg.macUser's ~/.ssh/authorized_keys on the Mac. If that
+    # key is missing, autossh refuses and it looks exactly like a Parallels
+    # networking failure.
+    #
+    # StrictHostKeyChecking=no + UserKnownHostsFile=/dev/null (A6) are
+    # deliberate here: this is our own Mac, over a host-only link, with
+    # unattended first-connect on every fresh guest. Without this pairing, a
+    # regenerated Mac host key would trip "HOST KEY CHANGED" on the guest
+    # side and silently kill the tunnel. Revisit at M3.
+    #
+    # Restart on failure: PTY-severance on restart is expected and handled
+    # by Restart=always + RestartSec.
+    systemd.services.nix-builder-tunnel = {
+      description = "Reverse SSH tunnel to Mac for remote Nix builder access";
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
+      wantedBy = [ "multi-user.target" ];
+
+      # Must be at the service top level, NOT under serviceConfig.
+      environment.AUTOSSH_GATETIME = "0";
+
+      path = [ pkgs.autossh ];
+
+      serviceConfig = {
+        User = "parallels";
+        Restart = "always";
+        RestartSec = 10;
+        ExecStart = "${pkgs.autossh}/bin/autossh -M 0 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /home/parallels/.ssh/id_guest -N -R 2222:localhost:22 ${cfg.macUser}@${cfg.tunnelTargetHost}";
+      };
+    };
   };
 }
