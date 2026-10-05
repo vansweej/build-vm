@@ -51,6 +51,26 @@ in
       default = hostCfg.authorizedKeys;
       description = "Public keys authorized for the parallels and root users on the guest.";
     };
+    rootDevice = lib.mkOption {
+      type = lib.types.str;
+      default = hostCfg.rootDevice;
+      description = "Per-host root filesystem device (by-uuid, since the installer does not label partitions).";
+    };
+    rootFsType = lib.mkOption {
+      type = lib.types.str;
+      default = hostCfg.rootFsType;
+      description = "Per-host root filesystem type.";
+    };
+    bootDevice = lib.mkOption {
+      type = lib.types.str;
+      default = hostCfg.bootDevice;
+      description = "Per-host ESP (/boot) device (by-uuid).";
+    };
+    bootFsType = lib.mkOption {
+      type = lib.types.str;
+      default = hostCfg.bootFsType;
+      description = "Per-host ESP (/boot) filesystem type.";
+    };
   };
 
   config = {
@@ -68,16 +88,29 @@ in
 
     # --- Minimal boot/fs/stateVersion floor (A8) ---------------------------
     # This is only enough for `toplevel` to be reachable at eval time.
-    # Leg 2's NixOS installer generates its own hardware-configuration.nix,
-    # which overrides these mkDefault values with the real disk layout.
+    # Values come from hostCfg (per-host, via buildVm.rootDevice/rootFsType/
+    # bootDevice/bootFsType) rather than a hardcoded guess, because the
+    # NixOS installer does not label partitions by default: an earlier
+    # generic "/dev/disk/by-label/nixos" stub matched no real disk and hung
+    # early boot (systemd/initrd waiting indefinitely for a device that
+    # never appears -- discovered live in Phase 7). If this flake is ever
+    # changed to import a real hardware-configuration.nix (e.g. via an
+    # absolute-path module added at deploy time), that would override these
+    # mkDefault values with the installer's own detection; for now, the
+    # per-host hostCfg values are the source of truth.
     # Never place the Nix store on prl_fs (the Parallels shared filesystem) --
     # it does not support the features the store needs.
     boot.loader.systemd-boot.enable = lib.mkDefault true;
     boot.loader.efi.canTouchEfiVariables = lib.mkDefault true;
 
     fileSystems."/" = lib.mkDefault {
-      device = "/dev/disk/by-label/nixos";
-      fsType = "ext4";
+      device = cfg.rootDevice;
+      fsType = cfg.rootFsType;
+    };
+
+    fileSystems."/boot" = lib.mkDefault {
+      device = cfg.bootDevice;
+      fsType = cfg.bootFsType;
     };
 
     system.stateVersion = "24.05";
