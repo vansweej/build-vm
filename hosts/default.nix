@@ -7,4 +7,5 @@
   interface = "enp0s5";
   tunnelTargetHost = "10.211.55.1";
   authorizedKeys = [ ];
+  enableVmTest = false;
 }
