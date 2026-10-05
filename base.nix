@@ -127,10 +127,16 @@ in
 
     # Parallels guest tools spike: pulls unfree prl-tools via the predicate
     # above. Historically x86-centric with no confirmed prior aarch64 usage;
-    # resolved live in Phase 7 against a real aarch64 NixOS guest. If it
-    # fails to build there, this line gets commented out (see
-    # docs/ssh-foundation.md Open Decisions).
-    hardware.parallels.enable = true;
+    # resolved live in Phase 7 against a real aarch64 NixOS guest.
+    #
+    # OUTCOME (Phase 7 Step 2, live): enabling this froze the guest solid
+    # (black screen, blinking cursor, unresponsive to the network, required
+    # a hard Parallels reset) during nixos-rebuild switch activation --
+    # almost certainly prl-tools' framebuffer/display kernel module
+    # misbehaving on aarch64. Commented out for M0 per the plan's resolution
+    # path (b): "fails -> comment the line, confirm guest still
+    # networks/tunnels". See docs/ssh-foundation.md Open Decisions.
+    # hardware.parallels.enable = true;
 
     # --- Guest -> Mac reverse tunnel (Pitfall #4) ---------------------------
     # autossh keeps an outbound reverse tunnel open so the Mac can reach the
