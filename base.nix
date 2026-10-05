@@ -101,14 +101,15 @@ in
     # Never place the Nix store on prl_fs (the Parallels shared filesystem) --
     # it does not support the features the store needs.
     boot.loader.systemd-boot.enable = lib.mkDefault true;
-    # false, not true: Parallels' aarch64 virtual UEFI firmware hangs the
-    # whole VM hard (needs a hypervisor-level reset, not just a reboot) when
-    # NixOS tries to write EFI NVRAM boot variables during activation --
-    # discovered live in Phase 7 as an "instant freeze, zero output" on
-    # `nixos-rebuild switch`, distinct from (and found after fixing) the
-    # fileSystems device-timeout hang above. systemd-boot still boots fine
-    # via the ESP's fallback /EFI/BOOT/BOOTAA64.EFI path without touching
-    # NVRAM at all.
+    # false, not true: a precaution, not a confirmed fix. Live `nixos-rebuild
+    # switch` repeatedly froze this VM hard (0% CPU, network unreachable,
+    # needed a hypervisor-level reset) during Phase 7, and EFI NVRAM writes
+    # were one suspect. Disabling this did NOT, by itself, stop the freeze --
+    # it kept happening on live `switch` afterwards too. The freeze was only
+    # avoided by using `nixos-rebuild boot` + a clean `reboot` instead of a
+    # live `switch` (see docs/ssh-foundation.md). Left disabled here because
+    # it's a safe no-op for an ESP that boots via its ext fallback path
+    # anyway, not because it was proven to matter.
     boot.loader.efi.canTouchEfiVariables = lib.mkDefault false;
 
     fileSystems."/" = lib.mkDefault {
@@ -167,16 +168,18 @@ in
     security.sudo.wheelNeedsPassword = false;
 
     # Parallels guest tools spike: pulls unfree prl-tools via the predicate
-    # above. Historically x86-centric with no confirmed prior aarch64 usage;
-    # resolved live in Phase 7 against a real aarch64 NixOS guest.
+    # above. Historically x86-centric with no confirmed prior aarch64 usage.
     #
-    # OUTCOME (Phase 7 Step 2, live): enabling this froze the guest solid
-    # (black screen, blinking cursor, unresponsive to the network, required
-    # a hard Parallels reset) during nixos-rebuild switch activation --
-    # almost certainly prl-tools' framebuffer/display kernel module
-    # misbehaving on aarch64. Commented out for M0 per the plan's resolution
-    # path (b): "fails -> comment the line, confirm guest still
-    # networks/tunnels". See docs/ssh-foundation.md Open Decisions.
+    # STATUS (Phase 7, live): still UNRESOLVED, not confirmed either way.
+    # Enabled it once and the VM froze solid during `nixos-rebuild switch`
+    # activation. But every live `switch` attempt froze the same way
+    # afterwards too, including with this line removed -- the freeze turned
+    # out to be tied to live `switch` activation generally (specifically
+    # suspected: a live DHCP->static networking reconfiguration), not
+    # specifically to prl-tools. Left commented out for M0 purely out of
+    # caution (plan resolution path (b)); the actual aarch64 prl-tools
+    # outcome is still an open question. See docs/ssh-foundation.md Open
+    # Decisions -- do not treat this as a confirmed finding.
     # hardware.parallels.enable = true;
 
     # --- Guest -> Mac reverse tunnel (Pitfall #4) ---------------------------
