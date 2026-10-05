@@ -19,8 +19,8 @@
   # per-host, here -- not hardcoded in base.nix -- because a re-rolled
   # guest will get fresh UUIDs and this is exactly the file meant to carry
   # per-host values. Update these on every guest re-roll.
-  rootDevice = "/dev/disk/by-uuid/587ee538-56cc-43d2-b678-654b54519df0";
+  rootDevice = "/dev/disk/by-uuid/ddd46579-16ba-4729-a16b-32bcc2ba683e";
   rootFsType = "ext4";
-  bootDevice = "/dev/disk/by-uuid/6295-1D39";
+  bootDevice = "/dev/disk/by-uuid/A2FC-8F75";
   bootFsType = "vfat";
 }
