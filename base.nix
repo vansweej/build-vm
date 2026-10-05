@@ -101,7 +101,15 @@ in
     # Never place the Nix store on prl_fs (the Parallels shared filesystem) --
     # it does not support the features the store needs.
     boot.loader.systemd-boot.enable = lib.mkDefault true;
-    boot.loader.efi.canTouchEfiVariables = lib.mkDefault true;
+    # false, not true: Parallels' aarch64 virtual UEFI firmware hangs the
+    # whole VM hard (needs a hypervisor-level reset, not just a reboot) when
+    # NixOS tries to write EFI NVRAM boot variables during activation --
+    # discovered live in Phase 7 as an "instant freeze, zero output" on
+    # `nixos-rebuild switch`, distinct from (and found after fixing) the
+    # fileSystems device-timeout hang above. systemd-boot still boots fine
+    # via the ESP's fallback /EFI/BOOT/BOOTAA64.EFI path without touching
+    # NVRAM at all.
+    boot.loader.efi.canTouchEfiVariables = lib.mkDefault false;
 
     fileSystems."/" = lib.mkDefault {
       device = cfg.rootDevice;
