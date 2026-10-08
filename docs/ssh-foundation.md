@@ -166,10 +166,10 @@ live, in this interactive session, against a real Parallels VM.
 | 2 | Merged config resolves intended values (sshd, sudo, wheel, tunnel unit, static IP) | check (`base-merged`) | ✅ check-verified |
 | 3 | `macUser = null` gates `toplevel` with the exact message | check (`macuser-assertion`) | ✅ check-verified |
 | 4 | Leg 1: Parallels transport (Mac→guest via reverse tunnel) | session | ✅ session-verified (exit 0) |
-| 5 | Leg 2: Mac→guest Nix builder handshake (`nix store info --store ssh-ng://nix-builder`) | session | pending Phase 7 |
-| 6 | `sudo -n true` on the guest (passwordless sudo + wheel, F3) | session | pending Phase 7 |
-| 7 | Cold-boot connect (fresh guest boots, tunnel comes up unattended) | session | pending Phase 7 |
-| 8 | Guest reboot reconnect (tunnel survives/re-establishes after `reboot`) | session | pending Phase 7 |
+| 5 | Leg 2: Mac→guest Nix builder handshake (`nix store info --store ssh-ng://nix-builder`) | session | ✅ session-verified |
+| 6 | `sudo -n true` on the guest (passwordless sudo + wheel, F3) | session | ✅ session-verified (`SUDO_OK`) |
+| 7 | Cold-boot connect (fresh guest boots, tunnel comes up unattended) | session | ✅ session-verified (via `boot`+`reboot`) |
+| 8 | Guest reboot reconnect (tunnel survives/re-establishes after `reboot`) | session | ⏳ in progress -- next action on resume |
 | 9 | `max-jobs=0` diagnostic (~10 min), then reverted | session | pending Phase 7 |
 | 10 | Mac-reboot reconnect | session (deferred) | pending, past session boundary |
 | 11 | Guest re-roll alias stability | session (deferred) | pending, past session boundary |
@@ -190,10 +190,11 @@ These run live, with Jan at the keyboard, inside this session:
 
 ### — SESSION BOUNDARY — resume here —
 
-Rows 10–12 require a Mac reboot, which would kill this very session (and
-the SSH link it runs over). They are deferred to a follow-up session.
+The Mac needs an OS update + reboot, which kills this session, the tunnel,
+and the current guest's usability (new guest will be needed; see below).
+Rows 8-9 were interrupted mid-flight; rows 10-12 were always deferred.
 
-**State to resume from** (fill in as Phases 6/7 actually run):
+**State to resume from:**
 
 - Leg 1 (Ubuntu) result: **PASSED.** Fresh Ubuntu 26.04 guest
   (`ubuntu-26-04`), DHCP address `10.211.55.19` on `eth0` (altname
@@ -208,7 +209,7 @@ the SSH link it runs over). They are deferred to a follow-up session.
   `sudo ssh -p 2222 -i /etc/nix/nix-builder-key parallels@localhost true`
   → **exit 0**. Guest discarded after.
 
-  **Two issues hit and fixed, both now folded into this runbook /
+  **Two issues hit and fixed, both folded into this runbook /
   `hosts/default.nix`:**
   1. `hosts/default.nix`'s `tunnelTargetHost` was wrong: `10.211.55.1` is
      the Parallels Shared-network **gateway/router**, not the Mac. The
@@ -223,11 +224,158 @@ the SSH link it runs over). They are deferred to a follow-up session.
      Not applicable to Leg 2 (NixOS ships/enables sshd via `base.nix`
      itself), but worth remembering if a throwaway transport-only guest
      is ever re-used for Leg 1 again.
-- Leg 2 (NixOS) result: _pending_
-- `prl-tools` spike outcome: _pending_ (see Open Decisions)
-- In-session gate lines 5–9: _pending_
-- Current guest IP / host key state: _pending_
-- Anything re-seeded on the Mac (`known_hosts`, `authorized_keys`): _pending_
+
+- **Leg 2 (NixOS) result: PARTIALLY PASSED this session, interrupted by a
+  Mac OS update reboot before rows 8-9 finished.** Full handshake
+  (`nix store info --store ssh-ng://nix-builder`) and `sudo -n true` both
+  passed once. Multiple fresh guests were burned getting there (see
+  findings below); **the guest in flight when the session was interrupted
+  will not survive the Mac reboot in a useful state and should be
+  discarded** -- resume with a brand new guest and replay the steps below
+  in order, rather than trying to recover the old one.
+
+  **Findings from this session's repeated guest churn, in the order they
+  were hit (replay in this order on a fresh guest):**
+
+  1. **`fileSystems."/"` / `/boot` must be per-host, UUID-based, not a
+     generic label.** The NixOS installer does not label partitions. An
+     initial `base.nix` stub (`/dev/disk/by-label/nixos`) matched no real
+     disk on any guest and hung early boot indefinitely waiting for a
+     device that doesn't exist (symptom: "A start job is running for
+     /dev/disk/by-label/nixos", eventually times out into emergency mode
+     stuck on `initrd.target`). **Fixed structurally**: `base.nix` now
+     reads `buildVm.rootDevice`/`rootFsType`/`bootDevice`/`bootFsType`
+     from `hostCfg` (`hosts/default.nix`), which must be set from this
+     specific guest's own `lsblk -f` output on **every single VM
+     re-roll** (UUIDs are different every time, even for what looks like
+     "the same" guest). This was re-done 3 times this session as guests
+     were discarded and recreated. **This is a standing operational
+     cost of the current design** -- there is no per-host override file
+     per physical/virtual machine, just the one `hosts/default.nix`, so
+     every re-roll requires a manual edit+push before `nixos-rebuild`
+     will even boot successfully. Worth reconsidering post-M0 (e.g.
+     reading `/etc/nixos/hardware-configuration.nix` via an absolute-path
+     module import at deploy time -- not done for M0 to keep
+     `nixos-rebuild switch --flake github:...` as the single deploy
+     command with no extra flags).
+  2. **Live `nixos-rebuild switch` reliably freezes the VM hard** (CPU
+     drops to ~0%, network becomes totally unreachable, local console
+     shows a blank/blinking-cursor state, requires a Parallels hard
+     reset -- not a graceful crash). This was reproduced **repeatedly**,
+     across multiple fresh guests, with different `base.nix` content each
+     time (with and without `hardware.parallels.enable`, with and without
+     `canTouchEfiVariables`). **Root cause still not confirmed.** Current
+     theory: something in the live DHCP→static networking
+     reconfiguration during activation hangs/panics; not proven. **Two
+     changes were made during triage that are NOT confirmed fixes** --
+     they're left in place as low-risk precautions, not because they were
+     shown to matter:
+     - `hardware.parallels.enable` commented out (prl-tools aarch64
+       outcome is **still an open question**, not resolved -- see Open
+       Decisions).
+     - `boot.loader.efi.canTouchEfiVariables` set to `false` (plausible
+       given some virtual UEFI implementations hang on NVRAM writes, but
+       the freeze still reproduced after this change too; left disabled
+       as a safe no-op since the ESP boots fine without touching NVRAM).
+     - **The actual, working mitigation**: don't use live `switch` at
+       all. Use `nixos-rebuild boot --flake ... [--refresh]` followed by
+       a clean `sudo reboot`. This reliably works where `switch` hangs,
+       and happens to line up with gate lines 7/8 (cold-boot /
+       reboot-reconnect) anyway, which are about boot-time activation,
+       not live switching. **Adopt `boot` + `reboot` as the standing
+       deploy method for this guest going forward; do not attempt live
+       `switch` again without further diagnosis.**
+  3. **`nixos-rebuild ... --flake github:owner/repo#...` caches the
+     branch for up to an hour** (`tarball-ttl`, default 3600s). A push to
+     `main` is **not** picked up by a subsequent `nixos-rebuild` on the
+     guest unless you force a refetch. Add `--refresh` to the
+     `nixos-rebuild` command whenever you've just pushed a fix and need
+     the guest to see it immediately. (Fallback if `--refresh` isn't
+     supported by the installed `nixos-rebuild` version:
+     `--option tarball-ttl 0`.)
+  4. **No console access exists for debugging by design (A4), and this
+     bit us.** When static networking failed to come up on one guest,
+     there was no way in at all -- SSH is key-only and console login has
+     no password. Worked around by **temporarily** adding
+     `services.getty.autologinUser = "root"` to `base.nix` (console-only;
+     does not touch sshd's key-only policy) to get a diagnostic shell.
+     **This was reverted** once the guest's networking was confirmed
+     working and the guest-side key was in place. If this happens again:
+     the same temporary autologin trick works and is safe for a
+     disposable, host-only VM, but must always be reverted (see base.nix
+     git history around commits `ae2be33`/`3bc3e18` for the exact
+     diff if reusing this trick) before considering M0 done.
+  5. **Direct Mac→guest reachability at the static IP is NOT required by
+     the architecture and should not be used as a diagnostic signal.**
+     Burned real time chasing "Mac can't ping guest's `.100`" as if it
+     were a blocker. It isn't: the design deliberately never needs
+     Mac→guest direct reachability (Pitfalls #3/#4) -- only guest→Mac
+     (autossh tunnel) and then Mac→`localhost:2222` (the forwarded port).
+     Confirmed guest→Mac ICMP works fine even when Mac→guest ICMP to the
+     same static IP returns "No route to host"; this asymmetry is
+     expected/fine and is not itself diagnostic of anything being broken.
+  6. **Guest→Mac key setup cannot rely on manual transcription.** With no
+     clipboard sharing between the Parallels guest window and the Mac,
+     hand-typing a ~68-character base64 ed25519 public key produced a
+     single-character transcription error (`l` vs `I`) that silently
+     produced an invalid key (`ssh-keygen -lf` rejected it outright).
+     **Fix: push the key from guest to Mac over SSH instead of
+     retyping it** -- works because guest→Mac connectivity is already
+     available at this point in the setup:
+     `cat ~/.ssh/id_guest.pub | ssh <macUser>@10.211.55.2 "cat >> ~/.ssh/authorized_keys"`
+     (password prompt, typed locally on the guest console, nothing
+     exposed over the network beyond normal SSH auth). Use this method
+     every time from now on; never hand-transcribe a key across this
+     boundary again.
+  7. **DNS resolution inside the guest fails even though routing,
+     gateway, and raw TCP/UDP connectivity to the DNS server are all
+     fine.** `curl`, `getent hosts`, etc. all fail with "could not
+     resolve host" against `api.github.com`/`github.com`, even with
+     `8.8.8.8` and `1.1.1.1` both tried, and even forcing TCP-mode DNS
+     (`options use-vc`). `nc -zv` (both `-u` and TCP) to port 53 on both
+     servers succeeds. `nsswitch.conf`'s `hosts:` line is normal
+     (`mymachines files myhostname dns`, no `systemd-resolved`
+     involvement -- that unit doesn't even exist on this guest).
+     **Root cause NOT found before the session was interrupted.**
+     Immediate workaround used: resolve the handful of needed hostnames
+     from the Mac (`dig +short <host>`) and append static `/etc/hosts`
+     entries on the guest for `github.com`, `api.github.com`,
+     `codeload.github.com`, `objects.githubusercontent.com`,
+     `raw.githubusercontent.com`, `cache.nixos.org`,
+     `channels.nixos.org`. This is fragile (GitHub/Fastly IPs can
+     change) and **must be revisited** -- see Open Decisions. On a fresh
+     guest, expect to hit this again and re-resolve/re-apply the same
+     `/etc/hosts` workaround, or spend time actually diagnosing it
+     properly (prime suspect: some DNS-specific filtering on the
+     Mac's own network path, possibly related to corporate endpoint
+     security mentioned in the repo's prerequisites -- not confirmed).
+
+- `prl-tools` spike outcome: **still unresolved**, not just pending (see
+  point 2 above and Open Decisions).
+- In-session gate lines 5-7: ✅ passed (see table above). Line 8 (guest
+  reboot reconnect) was in progress -- the plan was to reboot once more
+  after reverting the autologin debug hack and re-confirm the handshake;
+  this didn't complete before the interruption. Line 9 (`max-jobs=0`)
+  was not yet started.
+- Current guest IP / host key state at interruption: guest was at
+  `10.211.55.24` → recreated as a fresh guest at `10.211.55.25` mid
+  session (disk UUIDs in `hosts/default.nix` currently match `.25`:
+  root `a931590e-e36f-45cc-93c1-027ee3233887`, boot `04D1-0362`). **This
+  guest will very likely not survive the Mac reboot usefully** (tunnel
+  will drop, and we were mid-DNS-workaround on it) -- plan to discard
+  it and start the next session with a fresh guest, replaying findings
+  1-7 above in order.
+- Mac-side state: `janvansweevelt`'s `~/.ssh/authorized_keys` currently
+  has 3 guest keys appended (`guest-ubuntu-leg1`, and one successful
+  `guest-nixos-leg2` from the `.25` guest). `/var/root/.ssh/known_hosts`
+  has been re-seeded for `[localhost]:2222` multiple times this session
+  (once per guest iteration); will need re-seeding again
+  (`sudo ssh-keygen -R "[localhost]:2222"` then
+  `sudo sh -c 'ssh-keyscan -p 2222 localhost >> /var/root/.ssh/known_hosts'`)
+  once a new guest's tunnel is up. `/etc/nix/machines` unchanged
+  (`ssh-ng://nix-builder ...`), `/var/root/.ssh/config`'s `nix-builder`
+  alias unchanged (`parallels@localhost:2222` via
+  `/etc/nix/nix-builder-key`).
 
 ### Deferred lines (rows 10–12)
 
@@ -261,8 +409,30 @@ and self-consistent; it is regression cover, not the milestone.
   closed.
 - **`prl-tools` on aarch64.** `hardware.parallels.enable = true` pulls
   unfree `prl-tools`, which has historically been x86-centric with no
-  confirmed prior aarch64 usage. Outcome recorded live during Phase 7
-  Step 2: _pending_.
+  confirmed prior aarch64 usage. **Still genuinely unresolved** (not just
+  "pending") -- it was enabled once and the VM froze, but the same freeze
+  reproduced afterward with the line removed too, so prl-tools was never
+  actually cleared or convicted. Needs a clean, isolated test: enable it
+  on a fresh guest where live `switch` is never used (only `boot` +
+  `reboot`), with nothing else changed at the same time, to get an actual
+  answer.
+- **Live `nixos-rebuild switch` hangs the VM hard.** Reproduced
+  repeatedly across multiple fresh guests and multiple different
+  `base.nix` contents. Root cause not confirmed; current working
+  mitigation is to never use it -- always `nixos-rebuild boot` + `reboot`
+  instead. Worth a dedicated diagnostic session (e.g. capture
+  `switch-to-configuration`'s trace right up to the freeze point with
+  the console issue ruled out as a factor, confirm via an SSH session
+  from the Mac if one can be kept alive through the switch, etc.).
+- **Guest DNS resolution fails outright** (`curl`/`getent` can't resolve
+  `github.com` etc.) even though routing, gateway, and raw TCP+UDP
+  connectivity to the DNS servers themselves all check out, and trying a
+  different resolver / forcing TCP-mode DNS didn't help either. Not
+  diagnosed before the session was interrupted. Current workaround is
+  static `/etc/hosts` entries for the handful of hosts `nixos-rebuild
+  --flake github:...` needs, resolved manually from the Mac. This is
+  fragile and blocks true "guest-pull" unattended operation until fixed
+  properly.
 - **Tailscale absent.** No mesh VPN is in play for M0; the reverse tunnel
   is the entire connectivity story. Revisit if/when guests need to reach
   anything beyond the Mac.
